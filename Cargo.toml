@@ -1,0 +1,13 @@
+[package]
+name = "emmylua_check_one"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.51", features = ["derive", "wrap_help"] }
+emmylua_code_analysis = "=0.20.0"
+emmy_lsp_types = "0.1.0"
+tokio = { version = "1.48", features = ["full"] }
+tokio-util = "0.7"
+ansi_term = "0.12"
+url = "2"
