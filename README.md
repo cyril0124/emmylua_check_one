@@ -41,19 +41,19 @@ emmylua_check_one -c .emmyrc.json src/path/to/File.lua
 ### Pre-built binary (recommended)
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cyril0124/emmylua_check_one/main/install.sh | bash
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cyril0124/emmylua_check_one/master/install.sh | bash
 ```
 
 Or with a specific version:
 
 ```bash
-VERSION=0.1.0 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cyril0124/emmylua_check_one/main/install.sh | bash
+VERSION=0.1.0 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cyril0124/emmylua_check_one/master/install.sh | bash
 ```
 
 Or install to a custom directory:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cyril0124/emmylua_check_one/main/install.sh | INSTALL_DIR=/usr/local/bin bash
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cyril0124/emmylua_check_one/master/install.sh | INSTALL_DIR=/usr/local/bin bash
 ```
 
 ### From source
