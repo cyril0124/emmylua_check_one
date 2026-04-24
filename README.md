@@ -61,6 +61,24 @@ curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cyril0124
 
 ### From source
 
+#### Using `cargo install` (requires Rust toolchain)
+
+Install directly from the GitHub repository (this project is not published to crates.io):
+
+```bash
+cargo install --git https://github.com/cyril0124/emmylua_check_one.git
+```
+
+Or install from a local clone:
+
+```bash
+git clone https://github.com/cyril0124/emmylua_check_one.git
+cd emmylua_check_one
+cargo install --path .
+```
+
+#### Build locally
+
 ```bash
 cargo build --release
 ```

@@ -91,3 +91,4 @@ fi
 echo "Usage:"
 echo "  $BIN_NAME -c .emmyrc.json src/path/to/File.lua"
 echo "  $BIN_NAME src/path/to/File.lua"
+echo "  $BIN_NAME src/path/to/directory/"
