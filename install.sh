@@ -44,8 +44,10 @@ if [ -n "${VERSION:-}" ]; then
     RELEASE_URL="https://github.com/$REPO/releases/download/v$VERSION"
 else
     echo "Fetching latest release..."
-    LATEST=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
-    if [ -z "$LATEST" ]; then
+    # Use redirect URL instead of GitHub API to avoid rate limits
+    LATEST_URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")
+    LATEST=$(basename "$LATEST_URL" | sed 's/^v//')
+    if [ -z "$LATEST" ] || [ "$LATEST" = "latest" ]; then
         echo "Failed to determine latest version"
         exit 1
     fi
