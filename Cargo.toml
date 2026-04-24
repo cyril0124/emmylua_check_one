@@ -11,3 +11,4 @@ tokio = { version = "1.48", features = ["full"] }
 tokio-util = "0.7"
 ansi_term = "0.12"
 url = "2"
+walkdir = "2"

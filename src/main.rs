@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::error::Error;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -365,7 +364,11 @@ fn print_summary(
 }
 
 fn find_config(file: &Path) -> Result<PathBuf, Box<dyn Error + Sync + Send>> {
-    let mut dir = file.parent().ok_or("file has no parent directory")?;
+    let mut dir = if file.is_dir() {
+        file
+    } else {
+        file.parent().ok_or("file has no parent directory")?
+    };
     loop {
         for name in [".emmyrc.json", ".luarc.json"] {
             let candidate = dir.join(name);
@@ -381,25 +384,180 @@ fn find_config(file: &Path) -> Result<PathBuf, Box<dyn Error + Sync + Send>> {
     Err("no .emmyrc.json or .luarc.json found in file's directory or any ancestor".into())
 }
 
+/// Collect all `.lua` files recursively under the given directory.
+fn collect_lua_files(dir: &Path) -> Result<Vec<PathBuf>, Box<dyn Error + Sync + Send>> {
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension() {
+                if ext.eq_ignore_ascii_case("lua") {
+                    files.push(path.to_path_buf());
+                }
+            }
+        }
+    }
+    // Sort for deterministic output.
+    files.sort();
+    Ok(files)
+}
+
+struct FileDiagnostics {
+    file_path: String,
+    error_count: usize,
+    warning_count: usize,
+    info_count: usize,
+    hint_count: usize,
+    diagnostics: Vec<Diagnostic>,
+}
+
+fn diagnose_single_file(
+    analysis: &EmmyLuaAnalysis,
+    config_root: &Path,
+    file: &Path,
+) -> Option<FileDiagnostics> {
+    let target_uri = path_to_uri(file)?;
+    let file_id = analysis.get_file_id(&target_uri)?;
+
+    let cancel = CancellationToken::new();
+    let diagnostics = analysis.diagnose_file(file_id, cancel);
+
+    let db = analysis.compilation.get_db();
+    let file_path = db
+        .get_vfs()
+        .get_file_path(&file_id)
+        .and_then(|p| p.strip_prefix(config_root).ok())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| {
+            file.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string()
+        });
+
+    let mut error_count = 0;
+    let mut warning_count = 0;
+    let mut info_count = 0;
+    let mut hint_count = 0;
+
+    let diagnostics = diagnostics.unwrap_or_default();
+    for diag in &diagnostics {
+        match diag.severity {
+            Some(DiagnosticSeverity::ERROR) => error_count += 1,
+            Some(DiagnosticSeverity::WARNING) => warning_count += 1,
+            Some(DiagnosticSeverity::INFORMATION) => info_count += 1,
+            Some(DiagnosticSeverity::HINT) => hint_count += 1,
+            _ => error_count += 1,
+        }
+    }
+
+    Some(FileDiagnostics {
+        file_path,
+        error_count,
+        warning_count,
+        info_count,
+        hint_count,
+        diagnostics,
+    })
+}
+
+fn run_check(
+    analysis: &EmmyLuaAnalysis,
+    config_root: &Path,
+    target_files: &[PathBuf],
+    warnings_as_errors: bool,
+) -> i32 {
+    let mut total_errors = 0usize;
+    let mut total_warnings = 0usize;
+    let mut total_info = 0usize;
+    let mut total_hints = 0usize;
+
+    let db = analysis.compilation.get_db();
+
+    for file in target_files {
+        let Some(result) = diagnose_single_file(analysis, config_root, file) else {
+            continue;
+        };
+
+        total_errors += result.error_count;
+        total_warnings += result.warning_count;
+        total_info += result.info_count;
+        total_hints += result.hint_count;
+
+        print_file_header(
+            &result.file_path,
+            result.error_count,
+            result.warning_count,
+            result.info_count,
+            result.hint_count,
+        );
+        println!();
+
+        if !result.diagnostics.is_empty() {
+            let target_uri = path_to_uri(file).unwrap();
+            let file_id = analysis.get_file_id(&target_uri).unwrap();
+            let document = db.get_vfs().get_document(&file_id).unwrap();
+            let text = document.get_text();
+            let lines: Vec<&str> = text.lines().collect();
+
+            for diagnostic in result.diagnostics {
+                display_single_diagnostic(&result.file_path, &document, &lines, diagnostic);
+            }
+        }
+    }
+
+    print_summary(
+        total_errors,
+        total_warnings,
+        total_info,
+        total_hints,
+        warnings_as_errors,
+    )
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let args = Args::parse();
-    let file = resolve_path(&args.file)?;
+    let input = resolve_path(&args.file)?;
 
     let config = match args.config {
         Some(c) => resolve_path(&c)?,
-        None => find_config(&file)?,
+        None => find_config(&input)?,
     };
 
     let config_root = config.parent().ok_or("config has no parent")?.to_path_buf();
 
-    if !file.starts_with(&config_root) {
-        return Err(format!(
-            "file {} is outside config root {}",
-            file.display(),
-            config_root.display()
-        )
-        .into());
+    // Determine target files: single file or all .lua files under a directory.
+    let target_files: Vec<PathBuf>;
+    let is_dir = input.is_dir();
+    if is_dir {
+        if !input.starts_with(&config_root) {
+            return Err(format!(
+                "directory {} is outside config root {}",
+                input.display(),
+                config_root.display()
+            )
+            .into());
+        }
+        target_files = collect_lua_files(&input)?;
+        if target_files.is_empty() {
+            eprintln!("No .lua files found in {}", input.display());
+            return Ok(());
+        }
+    } else {
+        if !input.starts_with(&config_root) {
+            return Err(format!(
+                "file {} is outside config root {}",
+                input.display(),
+                config_root.display()
+            )
+            .into());
+        }
+        target_files = vec![input.clone()];
     }
 
     // 1. Load and process emmyrc
@@ -434,67 +592,11 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         .collect();
     analysis.update_files_by_path(files);
 
-    // 5. Find target file
-    let target_uri = path_to_uri(&file).ok_or("invalid file path")?;
-    let file_id = analysis
-        .get_file_id(&target_uri)
-        .ok_or("file not found in workspace")?;
-
-    // 6. Diagnose only the target file
-    let cancel = CancellationToken::new();
-    let diagnostics = analysis.diagnose_file(file_id, cancel);
-
-    // 7. Output
-    let db = analysis.compilation.get_db();
-    let file_path = db
-        .get_vfs()
-        .get_file_path(&file_id)
-        .and_then(|p| p.strip_prefix(&config_root).ok())
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| {
-            file.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string()
-        });
-
-    let document = db.get_vfs().get_document(&file_id).unwrap();
-    let text = document.get_text();
-    let lines: Vec<&str> = text.lines().collect();
-
-    let mut counts: HashMap<&str, usize> = HashMap::new();
-    if let Some(ref diagnostics) = diagnostics {
-        for diag in diagnostics {
-            let key = match diag.severity {
-                Some(DiagnosticSeverity::ERROR) => "error",
-                Some(DiagnosticSeverity::WARNING) => "warning",
-                Some(DiagnosticSeverity::INFORMATION) => "info",
-                Some(DiagnosticSeverity::HINT) => "hint",
-                _ => "unknown",
-            };
-            *counts.entry(key).or_insert(0) += 1;
-        }
-    }
-
-    let error_count = counts.get("error").copied().unwrap_or(0);
-    let warning_count = counts.get("warning").copied().unwrap_or(0);
-    let info_count = counts.get("info").copied().unwrap_or(0);
-    let hint_count = counts.get("hint").copied().unwrap_or(0);
-
-    print_file_header(&file_path, error_count, warning_count, info_count, hint_count);
-    println!();
-
-    if let Some(diagnostics) = diagnostics {
-        for diagnostic in diagnostics {
-            display_single_diagnostic(&file_path, &document, &lines, diagnostic);
-        }
-    }
-
-    let exit_code = print_summary(
-        error_count,
-        warning_count,
-        info_count,
-        hint_count,
+    // 5. Diagnose target files and output
+    let exit_code = run_check(
+        &analysis,
+        &config_root,
+        &target_files,
         args.warnings_as_errors,
     );
 
